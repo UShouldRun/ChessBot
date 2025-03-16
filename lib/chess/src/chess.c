@@ -2,37 +2,14 @@
 
 // ==============================# PUBLIC #================================
 
-ChessMoves chess_move_update(ChessMoves moves, ChessMove move) {
+char* chess_move_translate(ChessMoves moves) {
   if (moves == NULL)
     return NULL;
 
-  if (moves->last >= moves->s_array) {
-    assert(moves->s_array < CHESS_MOVES_MAX);
-
-    ChessMoves temp = (ChessMoves)realloc(
-      moves,
-      sizeof(struct chess_moves) + 2 * moves->s_array * sizeof(chess_move)
-    );
-    assert(temp != NULL);
-
-    temp->s_array  = 2 * moves->s_array;
-    temp->last = moves->last;
-
-    for (uint16_t i = 0; i < temp->last; i++)
-      temp->array[i] = moves->array[i];
-
-    moves = temp;
-  }
-
-  moves->array[moves->last++] = move;
-  return moves;
-}
-
-char* chess_move_translate(ChessMoves moves) {
   ChessBoard board = chess_board_std;
 }
 
-ChessBoard chess_position_play(ChessBoard board, ChessMove move) {
+ChessBoard chess_position_play(ChessBoard board, ChessMoves* moves, ChessMove move) {
   const uint8_t piece = chess_move_get_piece(move);
 
   if (piece == EMPTY) {
@@ -64,6 +41,7 @@ ChessBoard chess_position_play(ChessBoard board, ChessMove move) {
       }
     }
 
+    *moves = chess_move_update(*moves, move, true);
     return board;
   }
 
@@ -72,8 +50,12 @@ ChessBoard chess_position_play(ChessBoard board, ChessMove move) {
     j1 = chess_move_get_start_col(move),
     i2 = chess_move_get_end_row(move),
     j2 = chess_move_get_end_col(move);
+
   _modify_4bits(&(board[i1]), EMPTY, chess_move_coord2bit(j1));
   _modify_4bits(&(board[i2]), piece, chess_move_coord2bit(j2));
+  *moves = chess_move_update(
+    *moves, move, !chess_piece_pawn(chess_move_get_piece(move)) && chess_board_square_empty(board, i2, j2)
+  );
 
   return board;
 }
@@ -87,6 +69,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
 
   moves->s_array = s_moves;
   moves->last = 0;
+  moves->s_draw_moves = 0;
 
   for (uint8_t k = 0; k < CHESS_BOARD_SQUARES; k++) {
     const uint8_t
@@ -123,6 +106,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
       
       if (left != EMPTY)
@@ -144,6 +128,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
 
       for (uint8_t k = 0; k < MAX_KNIGHT_MOVES; k++)
@@ -162,6 +147,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
 
       for (uint8_t k = 0; k < MAX_BISHOP_MOVES; k++)
@@ -180,6 +166,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
 
       for (uint8_t k = 0; k < MAX_ROOK_MOVES; k++)
@@ -198,6 +185,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
 
       for (uint8_t k = 0; k < MAX_QUEEN_MOVES; k++)
@@ -216,6 +204,7 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
         moves = temp;
         moves->s_array = new_size;
         moves->last = new_size;
+        moves->s_draw_moves = 0;
       }
 
       for (uint8_t k = 0; k < MAX_KING_MOVES; k++)
@@ -232,17 +221,130 @@ ChessMoves chess_position_get_moves(ChessBoard board) {
   return chess_moves_refit(moves);
 }
 
-char* chess_position_encode(ChessBoard board) {
+char* chess_fen_encode(ChessBoard board, ChessMoves moves) {
+  assert(moves != NULL);
+  const ChessMove move = moves->array[moves->last];
 
+  size_t s_fen_str = 0;
+  char* fen_str = (char*)malloc(100 * sizeof(char));
+  assert(fen_str != NULL);
+  fen_str[99] = '\0';
+
+  for (uint8_t i = 0; i < 8; i++) {
+    uint8_t empty = 0;
+    for (uint8_t j = 0; j < 8; j++) {
+      uint8_t square = chess_board_square_get(board, i, j);
+
+      if (square != EMPTY) {
+        if (empty > 0)
+          fen_str[s_fen_str++] = (char)empty + '0';
+
+        fen_str[s_fen_str++] = chess_piece_to_char(square, i);
+        empty = 0;
+
+      } else {
+        empty++;
+      }
+    }
+
+    if (empty > 0)
+      fen_str[s_fen_str++] = (char)empty + '0';
+    fen_str[s_fen_str++] = '/';
+  }
+  fen_str[s_fen_str++] = ' ';
+
+  fen_str[s_fen_str++] = chess_piece_white(chess_move_get_piece(move)) ? 'w' : 'b';
+  fen_str[s_fen_str++] = ' ';
+
+  const bool
+    cK = chess_board_castle_short_white(board),
+    cQ = chess_board_castle_long_white(board),
+    ck = chess_board_castle_short_black(board),
+    cq = chess_board_castle_long_black(board);
+  if (cK)
+    fen_str[s_fen_str++] = 'K';
+  if (cQ)
+    fen_str[s_fen_str++] = 'Q';
+  if (ck)
+    fen_str[s_fen_str++] = 'k';
+  if (cq)
+    fen_str[s_fen_str++] = 'q';
+  if (!(cK || cQ || ck || cq))
+    fen_str[s_fen_str++] = '-';
+  fen_str[s_fen_str++] = ' ';
+
+  if (chess_piece_pawn(chess_move_get_piece(move)) && chess_pawn_forward2(move)) {
+    fen_str[s_fen_str++] = (char)((move >> 8) && 0b111) + 'a';
+    fen_str[s_fen_str++] = (char)((move >> 5) && 0b111) + '0';
+  } else {
+    fen_str[s_fen_str++] = '-'
+  }
+  fen_str[s_fen_str++] = ' ';
+
+  if (moves->s_draw_moves / 10 > 0)
+    fen_str[s_fen_str++] = (char)(moves->s_draw_moves / 10) + '0';
+  fen_str[s_fen_str++] = (char)(moves->s_draw_moves % 10) + '0';
+
+  uint16_t full_moves = (moves->last + 1) / 2;
+  uint16_t s_ch = 1;
+  for (uint16_t i = full_moves; i > 0; i /= 10, s_ch++);
+  for (uint16_t i = s_ch; i > 1; i++)
+    fen_str[s_fen_str++] = (char)(full_moves / _pow_int(10, i)) + '0';
+  fen_str[s_fen_str++] = (char)(full_moves % 10) + '0';
+
+  return fen_str;
 }
 
 void chess_position_print(ChessBoard board) {
+  char* position = chess_position_encode(board);
 
+  printf("%.*c\n", 8, '=');
+  for (uint8_t i = 0; i < 8; i++) {
+    for (uint8_t j = 0; j < 8; j++)
+      printf("%c", position[7 * i + j]);
+    printf("\n");
+  }
+  printf("%.*c\n", 8, '=');
 }
 
 // ==============================# PRIVATE #================================
 
+ChessMoves chess_move_update(ChessMoves moves, ChessMove move, const bool draw_move) {
+  if (moves == NULL)
+    return NULL;
+
+  if (moves->last >= moves->s_array) {
+    assert(moves->s_array < CHESS_MOVES_MAX);
+
+    ChessMoves temp = (ChessMoves)realloc(
+      moves,
+      sizeof(struct chess_moves) + 2 * moves->s_array * sizeof(chess_move)
+    );
+    assert(temp != NULL);
+
+    temp->s_array  = 2 * moves->s_array;
+    temp->last = moves->last;
+
+    for (uint16_t i = 0; i < temp->last; i++)
+      temp->array[i] = moves->array[i];
+
+    moves = temp;
+  }
+
+  moves->array[moves->last++] = move;
+  if (draw_move) {
+    moves->s_draw_moves++;
+  } else {
+    moves->s_draw_moves = 0;
+  }
+
+  return moves;
+}
+
 ChessMoves chess_moves_refit(ChessMoves moves) {
+  if (moves == NULL)
+    return NULL;
+
   const uint16_t s_array = moves->s_array;
 
   uint16_t empty = 0;
@@ -265,7 +367,8 @@ ChessMoves chess_moves_refit(ChessMoves moves) {
     assert(temp != NULL);
     moves = temp;
     moves->s_array = new_size;
-    moves->last = new_size;
+    moves->last = new_size - 1;
+    moves->s_draw_moves = 0;
   }
 
   return moves;
@@ -338,7 +441,7 @@ const bool chess_move_ilegal(ChessBoard board, ChessMove move) {
   for (; i < 8; i++) {
     for (; j < 8; j++) {
       const uint8_t square = chess_board_square_get(board, i, j);
-      const bool white_piece = chess_piece_white(square);
+      const bool white_piece = chess_piece_white(square, i);
       if (
           ((white_turn && white_piece) || (!white_turn && !white_piece))
           && chess_piece_king(square)
@@ -360,7 +463,7 @@ void chess_move_pawn_left(
   assert(moves != NULL);
   assert(i < 8 && j < 8);
   const uint8_t square = chess_board_square_get(board, i, j);
-  assert(chess_piece_white(square) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
+  assert(chess_piece_white(square, i) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
 
   for (uint8_t k = 0; k < MAX_PAWN_MOVES / 3; moves[k] = EMPTY, k++);
 
@@ -402,7 +505,7 @@ void chess_move_pawn_right(
   assert(moves != NULL);
   assert(i < 8 && j < 8);
   const uint8_t square = chess_board_square_get(board, i, j);
-  assert(chess_piece_white(square) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
+  assert(chess_piece_white(square, i) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
 
   for (uint8_t k = 0; k < MAX_PAWN_MOVES / 3; moves[k] = EMPTY, k++);
 
@@ -444,7 +547,7 @@ void chess_move_pawn_forward(
   assert(moves != NULL);
   assert(i < 8 && j < 8);
   const uint8_t square = chess_board_square_get(board, i, j);
-  assert(chess_piece_white(square) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
+  assert(chess_piece_white(square, i) == pwhite && chess_piece_pawn(square) && (piece == W_PAWN || piece == B_PAWN));
 
   for (uint8_t k = 0; k < MAX_PAWN_MOVES / 3; moves[k] = EMPTY, k++);
 
@@ -485,7 +588,7 @@ void chess_move_knight(ChessMove* moves, ChessBoard board, const uint8_t piece, 
   assert(i < 8 && j < 8);
   assert(chess_piece_knight(piece));
 
-  if (chess_piece_white(piece)) {
+  if (chess_piece_white(piece, i)) {
     moves[0] = chess_board_square_valid_white(board, i - 2, j + 1) ? chess_move_get_piece_to(piece, i, j, i - 2, j + 1) : EMPTY;
     moves[1] = chess_board_square_valid_white(board, i - 1, j + 2) ? chess_move_get_piece_to(piece, i, j, i - 1, j + 2) : EMPTY;
     moves[2] = chess_board_square_valid_white(board, i + 1, j + 2) ? chess_move_get_piece_to(piece, i, j, i + 1, j + 2) : EMPTY;
@@ -514,7 +617,7 @@ void chess_move_bishop(ChessMove* moves, ChessBoard board, const uint8_t piece, 
 
   for (uint8_t k = 0; k < MAX_BISHOP_MOVES; moves[k++] = EMPTY);
 
-  const bool is_white = chess_piece_white;
+  const bool is_white = chess_piece_white(piece, i);
 
   uint8_t 
     count = 0, 
@@ -542,7 +645,7 @@ void chess_move_rook(ChessMove* moves, ChessBoard board, const uint8_t piece, co
 
   for (uint8_t k = 0; k < MAX_ROOK_MOVES; moves[k++] = EMPTY);
 
-  const bool is_white = chess_piece_white(piece);
+  const bool is_white = chess_piece_white(piece, i);
   const uint8_t rook = piece == WBROOK_C ? (is_white ? W_ROOK : B_ROOK) : piece;
 
   uint8_t
@@ -571,7 +674,7 @@ void chess_move_queen(ChessMove* moves, ChessBoard board, const uint8_t piece, c
 
   for (uint8_t k = 0; k < MAX_QUEEN_MOVES; moves[k++] = EMPTY);
 
-  const bool is_white = chess_piece_white(piece);
+  const bool is_white = chess_piece_white(piece, i);
 
   uint8_t
     count = 0,
@@ -613,7 +716,7 @@ void chess_move_king(ChessMove* moves, ChessBoard board, const uint8_t piece, co
   assert(i < 8 && j < 8);
   assert(chess_piece_king(piece));
 
-  if (chess_piece_white(piece)) {
+  if (chess_piece_white(piece, i)) {
     moves[0] = chess_board_square_valid_white(board, i - 1, j) ? chess_move_get_piece_to(W_KING, i, j, i - 1, j) : EMPTY;
     moves[1] = chess_board_square_valid_white(board, i - 1, j + 1) ? chess_move_get_piece_to(W_KING, i, j, i - 1, j + 1) : EMPTY;
     moves[2] = chess_board_square_valid_white(board, i, j + 1) ? chess_move_get_piece_to(W_KING, i, j, i, j + 1) : EMPTY;
@@ -706,8 +809,8 @@ inline const bool chess_board_search_attack_diagonal(ChessBoard board, const uin
   for (uint8_t k = i - 1, l = j - 1; chess_board_check_coord(k, l); k--, l--) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -718,8 +821,8 @@ inline const bool chess_board_search_attack_diagonal(ChessBoard board, const uin
   for (uint8_t k = i - 1, l = j + 1; chess_board_check_coord(k, l); k--, l++) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -730,8 +833,8 @@ inline const bool chess_board_search_attack_diagonal(ChessBoard board, const uin
   for (uint8_t k = i + 1, l = j + 1; chess_board_check_coord(k, l); k++, l++) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -742,8 +845,8 @@ inline const bool chess_board_search_attack_diagonal(ChessBoard board, const uin
   for (uint8_t k = i + 1, l = j - 1; chess_board_check_coord(k, l); k++, l--) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -758,8 +861,8 @@ inline const bool chess_board_search_attack_vertical_horizontal(ChessBoard board
   for (uint8_t k = i - 1, l = j; chess_board_check_coord(k, l); k--) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_ROOK || square == W_QUEEN))
@@ -770,8 +873,8 @@ inline const bool chess_board_search_attack_vertical_horizontal(ChessBoard board
   for (uint8_t k = i, l = j + 1; chess_board_check_coord(k, l); l++) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_ROOK || square == W_QUEEN))
@@ -782,8 +885,8 @@ inline const bool chess_board_search_attack_vertical_horizontal(ChessBoard board
   for (uint8_t k = i + 1, l = j; chess_board_check_coord(k, l); k++) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -794,8 +897,8 @@ inline const bool chess_board_search_attack_vertical_horizontal(ChessBoard board
   for (uint8_t k = i, l = j - 1; chess_board_check_coord(k, l); l--) {
     const uint8_t square = chess_board_square_get(board, i, j);
     if (
-         ( is_white &&  chess_piece_white(square)) 
-      || (!is_white && !chess_piece_white(square))
+         ( is_white &&  chess_piece_white(square, k)) 
+      || (!is_white && !chess_piece_white(square, k))
     ) break;
     if (
          ( is_white && (square == W_BISHOP || square == W_QUEEN))
@@ -818,67 +921,67 @@ inline const uint8_t chess_move_get_piece(ChessMove move) {
   const uint8_t piece = chess_piece_type(move);
   if (!chess_move_pawn_promo(move))
     return piece;
-  return (chess_piece_white(piece) ? EMPTY : WB_DIFF) + (move >> 1) & 0b11;
+  return (chess_piece_white(piece, 0) ? EMPTY : WB_DIFF) + move & 0b11;
 }
 
 inline const uint16_t chess_move_get_pmove(ChessMove move) {
-  return move & ((1 << 13) - 1);
+  return move & ((1 << 12) - 1);
 }
 
-inline const uint8_t chess_move_get_start_row(ChessMove move) {
+inline const uint16_t chess_move_get_start_row(ChessMove move) {
   return (const uint8_t)(chess_move_get_pmove(move) >> 9);
 }
 
-inline const uint8_t chess_move_get_start_col(ChessMove move) {
+inline const uint16_t chess_move_get_start_col(ChessMove move) {
   return (const uint8_t)(chess_move_get_pmove(move) >> 6) & ((1 << 3) - 1);
 }
 
-inline const uint8_t chess_move_get_end_row(ChessMove move) {
+inline const uint16_t chess_move_get_end_row(ChessMove move) {
   return (const uint8_t)(chess_move_get_pmove(move) >> 3) & ((1 << 3) - 1);
 }
 
-inline const uint8_t chess_move_get_end_col(ChessMove move) {
+inline const uint16_t chess_move_get_end_col(ChessMove move) {
   return (const uint8_t)(chess_move_get_pmove(move)) & ((1 << 3) - 1);
 }
 
-inline const uint8_t chess_move_get_piece_to(const uint8_t piece, const uint8_t i0, const uint8_t j0, const uint8_t i1, const uint8_t j1) {
+inline const uint16_t chess_move_get_piece_to(const uint8_t piece, const uint8_t i0, const uint8_t j0, const uint8_t i1, const uint8_t j1) {
   return piece << 12 | i0 << 9 | j0 << 6 | i1 << 3 | j1;
 }
 
-inline const uint8_t chess_move_get_pawn_forward1(const uint8_t piece, const uint8_t i, const uint8_t j) {
+inline const uint16_t chess_move_get_pawn_forward1(const uint8_t piece, const uint8_t i, const uint8_t j) {
   return piece << 12 | i << 9 | j << 6;
 }
 
-inline const uint8_t chess_move_get_pawn_forward2(const uint8_t piece, const uint8_t i, const uint8_t j) {
+inline const uint16_t chess_move_get_pawn_forward2(const uint8_t piece, const uint8_t i, const uint8_t j) {
   return piece << 12 | i << 9 | j << 6 | 1 << 4;
 }
 
-inline const uint8_t chess_move_get_pawn_take_left(const uint8_t piece, const uint8_t i, const uint8_t j) {
+inline const uint16_t chess_move_get_pawn_take_left(const uint8_t piece, const uint8_t i, const uint8_t j) {
   return piece << 12 | i << 9 | j << 6 | 2 << 4;
 }
 
-inline const uint8_t chess_move_get_pawn_take_right(const uint8_t piece, const uint8_t i, const uint8_t j) {
+inline const uint16_t chess_move_get_pawn_take_right(const uint8_t piece, const uint8_t i, const uint8_t j) {
   return piece << 12 | i << 9 | j << 6 | 3 << 4;
 }
 
-inline const uint8_t chess_move_get_pawn_enpassant_left(const uint8_t piece, const uint8_t i, const uint8_t j) {
-  return chess_move_get_take_left(piece, i, j) | 1 << 3;
+inline const uint16_t chess_move_get_pawn_enpassant_left(const uint8_t piece, const uint8_t i, const uint8_t j) {
+  return chess_move_get_take_left(piece, i, j) | 1 << 4;
 }
 
-inline const uint8_t chess_move_get_pawn_enpassant_right(const uint8_t piece, const uint8_t i, const uint8_t j) {
-  return chess_move_get_take_right(piece, i, j) | 1 << 3;
+inline const uint16_t chess_move_get_pawn_enpassant_right(const uint8_t piece, const uint8_t i, const uint8_t j) {
+  return chess_move_get_take_right(piece, i, j) | 1 << 4;
 }
 
-inline const uint8_t chess_move_get_pawn_promo_forward(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
-  return chess_move_get_forward1(piece, i, j) | 1 << 2 | promo;
+inline const uint16_t chess_move_get_pawn_promo_forward(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
+  return chess_move_get_forward1(piece, i, j) | 1 << 3 | promo;
 }
 
-inline const uint8_t chess_move_get_pawn_promo_left(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
-  return chess_move_get_take_left(piece, i, j) | 1 << 2 | promo;
+inline const uint16_t chess_move_get_pawn_promo_left(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
+  return chess_move_get_take_left(piece, i, j) | 1 << 3 | promo;
 }
 
-inline const uint8_t chess_move_get_pawn_promo_right(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
-  return chess_move_get_take_right(piece, i, j) | 1 << 2 | promo;
+inline const uint16_t chess_move_get_pawn_promo_right(const uint8_t piece, const uint8_t i, const uint8_t j, const uint8_t promo) {
+  return chess_move_get_take_right(piece, i, j) | 1 << 3 | promo;
 }
 
 inline const bool chess_move_pawn_promo(ChessMove move) {
@@ -890,11 +993,11 @@ inline const bool chess_move_pawn_enpassant(ChessMove move) {
 }
 
 inline const bool chess_white_pawn_take_left(ChessBoard board, uint8_t i, uint8_t j) {
-  return i > 0 && chess_board_square_get(board, i - 1, j - 1) != EMPTY && !chess_piece_white(board, i - 1, j - 1);
+  return i > 0 && chess_board_square_get(board, i - 1, j - 1) != EMPTY && !chess_piece_white(chess_board_square_get(board, i - 1, j - 1), i - 1);
 }
 
 inline const bool chess_white_pawn_take_right(ChessBoard board, uint8_t i, uint8_t j) {
-  return i > 0 && chess_board_square_get(board, i - 1, j + 1) != EMPTY && !chess_piece_white(board, i - 1, j + 1);
+  return i > 0 && chess_board_square_get(board, i - 1, j + 1) != EMPTY && !chess_piece_white(chess_board_square_get(board, i - 1, j + 1), i- 1);
 }
 
 inline const bool chess_white_pawn_enpassant_left(ChessMove prev, ChessBoard board, uint8_t i, uint8_t j) {
@@ -912,11 +1015,11 @@ inline const bool chess_white_pawn_enpassant_right(ChessMove prev, ChessBoard bo
 }
 
 inline const bool chess_black_pawn_take_left(ChessBoard board, uint8_t i, uint8_t j) {
-  return i < 8 && chess_board_square_get(board, i + 1, j + 1) != EMPTY && chess_piece_white(board, i + 1, j + 1);
+  return i < 8 && chess_board_square_get(board, i + 1, j + 1) != EMPTY && chess_piece_white(chess_board_square_get(board, i + 1, j + 1), i + 1);
 }
 
 inline const bool chess_black_pawn_take_right(ChessBoard board, uint8_t i, uint8_t j) {
-  return i < 8 && chess_board_square_get(board, i + 1, j - 1) != EMPTY && chess_piece_white(board, i + 1, j - 1);
+  return i < 8 && chess_board_square_get(board, i + 1, j - 1) != EMPTY && chess_piece_white(chess_board_square_get(board, i + 1, j - 1), i + 1);
 }
 
 inline const bool chess_black_pawn_enpassant_left(ChessMove prev, ChessBoard board, uint8_t i, uint8_t j) {
@@ -931,6 +1034,10 @@ inline const bool chess_black_pawn_enpassant_right(ChessMove prev, ChessBoard bo
     chess_board_square_get(board, i, j + 1) != EMPTY &&
     prev == (W_PAWN << 12 | 6 << 9 | (j - 1) << 6 | 1 << 4)
   ;
+}
+
+inline const bool chess_pawn_forward2(ChessMove move) {
+  return (move & (1 << 4)) >> 4;
 }
 
 inline const uint8_t chess_piece_type(ChessMove move) {
@@ -954,11 +1061,11 @@ inline const bool chess_board_check_coord(const uint8_t i, const uint8_t j) {
 }
 
 inline const bool chess_board_square_valid_white(ChessBoard board, const uint8_t i, const uint8_t j) {
-  return chess_board_check_coord(i, j) && (chess_board_square_get(board, i, j) == EMPTY || !chess_piece_white(board, i, j));
+  return chess_board_check_coord(i, j) && (chess_board_square_get(board, i, j) == EMPTY || !chess_piece_white(chess_board_square_get(board, i, j), i);
 }
 
 inline const bool chess_board_square_valid_black(ChessBoard board, const uint8_t i, const uint8_t j) {
-  return chess_board_check_coord(i, j) && (chess_board_square_get(board, i, j) == EMPTY || chess_piece_white(board, i, j));
+  return chess_board_check_coord(i, j) && (chess_board_square_get(board, i, j) == EMPTY || chess_piece_white(chess_board_square_get(board, i, j), i);
 }
 
 inline const bool chess_board_castle_short_white(ChessBoard board) {
@@ -1023,6 +1130,30 @@ inline const bool chess_piece_king(const uint8_t square) {
   return square == W_KING || square == B_KING || chess_piece_king_castle(square);
 }
 
+char chess_piece_to_char(const uint8_t piece, const uint8_t i) {
+  switch (piece) {
+    case EMPTY:                  return '0';
+    case W_KING: case W_KING_C:  return 'K';
+    case W_QUEEN:                return 'Q';
+    case W_ROOK:                 return 'R';
+    case W_BISHOP:               return 'B';
+    case W_KNIGHT:               return 'N';
+    case W_PAWN:                 return 'P';
+    case B_KING: case B_KING_C:  return 'k';
+    case B_QUEEN:                return 'q';
+    case B_ROOK:                 return 'r';
+    case B_BISHOP:               return 'b';
+    case B_KNIGHT:               return 'n';
+    case B_PAWN:                 return 'p';
+    case WBROOK_C:               return i == 0 ? 'R' : 'r'; 
+    default: {
+      fprintf(stderr, "[ERROR]: failed to map piece to char - unknown piece\n");
+      exit(1);
+    }
+  }
+  return '\0';
+}
+
 void _modify_4bits(uint32_t* data, const uint32_t new_value, const uint8_t pos) {
   if (data == NULL)
     return;
@@ -1030,4 +1161,16 @@ void _modify_4bits(uint32_t* data, const uint32_t new_value, const uint8_t pos) 
   mask << pos;
   *data &= ~mask;
   *data |= (new_value & ((1U << 4) - 1)) << pos;
+}
+
+
+uint16_t _pow_int(uint16_t x, uint16_t n) {
+  assert(!(x == 0 && n == 0));
+  if (n == 0)
+    return 1;
+  if (x == 0 || n == 1)
+    return x;
+  uint16_t y = x;
+  for (; n > 1; y *= x, n--);
+  return y;
 }
